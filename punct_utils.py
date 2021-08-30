@@ -71,6 +71,35 @@ def smooth(x, y, h, x_out=None):
     K = np.exp(-0.5*cdist(x_out, x, metric='sqeuclidean')/h**2)
     return np.sum(K*y, axis=1)/np.sum(K, axis=1)
 
+def LeastTrimmedSquares(X, y, h, beta0, eps=1e-7):
+    w = np.zeros(y.size)
+    r = y-X@beta0
+    order = np.argsort(np.abs(r))
+    w[order[:h]], w[order[h:]] = 1, 0
+    betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), beta0
+    while linalg.norm(betap-betam) > eps:
+        r = y-X@betap
+        order = np.argsort(np.abs(r))
+        w[order[:h]], w[order[h:]] = 1, 0
+        betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), betap
+    return betap
+
+def AdaptativeLTS(X, y, h0, beta0, eps=1e-7):
+    i_range = np.arange(1, y.size+1)
+    # h0 = y.size//2
+    beta = LeastTrimmedSquares(X, y, h0, beta0, eps)
+    r = y-X@beta
+    s2 = np.cumsum(r**2)/i_range
+    sigma2 = (np.abs(r[h0-1])/stats.norm.ppf(3/4))**2
+    hp, hm = i_range[s2 <= sigma2][-1], h0
+    while hp != hm:
+        beta = LeastTrimmedSquares(X, y, hp, beta, eps)
+        r = y-X@beta
+        s2 = np.cumsum(r**2)/i_range
+        sigma2 = s2[hp-1]
+        hp, hm = i_range[s2 <= sigma2][-1], hp
+    return beta
+
 def getJ(n, pi):
     ''' Generation of a J matrix '''
     k = len(pi)
