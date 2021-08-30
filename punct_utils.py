@@ -368,3 +368,81 @@ def classification(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15
                 break
     
     return partition, (curves, reg, exp_smooth, partition0, n_tries)
+
+def classifLTS(X, y, h, beta0, eps=1e-7):
+    n, k = y.shape[0], len(h)
+    partition = -np.ones(n, dtype=int)
+    betap, betam = np.zeros(beta0.shape), beta0
+
+    r2 = np.sum((y-X@beta0)**2, axis=2)
+    order = np.argsort(r2, axis=1)
+    free = np.ones(n, dtype=bool)
+    for j in range(k):
+        idx = order[j][free[order[j]]][:h[j]]
+        partition[idx] = j
+        free[idx] = False
+        X_j, y_j = X[partition == j], y[partition == j]
+        betap[j] = linalg.solve(X_j.T@X_j, X_j.T@y_j)
+    while linalg.norm(betap-betam) > eps:
+        r2 = np.sum((y-X@betap)**2, axis=2)
+        order = np.argsort(r2, axis=1)
+        free[:], partition[:] = True, -1
+        for j in range(k):
+            idx = order[j][free[order[j]]][:h[j]]
+            partition[idx] = j
+            free[idx] = False
+            X_j, y_j = X[partition == j], y[partition == j]
+            betam[j] = betap[j]
+            betap[j] = linalg.solve(X_j.T@X_j, X_j.T@y_j)
+    return betap, partition
+
+def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
+    n_eigvecs = len(idx_eigvecs) 
+    df = len(idx_basis)
+    
+    X_reg = basis[idx_basis]
+    points = eigvecs[idx_eigvecs]
+    
+    # First step: ?
+    
+    h = np.sum(J, axis=0)
+    beta0 = np.array([np.eye(df, n_eigvecs)*np.random.randn() for _ in range(k)])
+    _, partition = classifLTS(X_reg.T, points.T, h, beta0)
+    
+    partition0 = partition.copy()
+    
+    # Second step: projection on the theoretical basis
+    X_reg = basis[idx_basis]
+    reg = np.zeros((k, df, n_eigvecs))
+    curves = np.zeros((k, n_eigvecs, n))
+    dist = np.zeros((k, n))
+    comb = list(combinations(range(k), 2))
+    ok = False
+    n_tries = 0
+    
+    while not ok and n_tries < max_tries:
+        n_tries += 1
+        if n_tries == max_tries:
+            comb = []
+        # Regression
+        for _ in range(2): # à revoir ?
+            for j in range(k):
+                X_reg_j = X_reg[:, partition == j]
+                reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, partition == j].T))
+                curves[j] = ((X_reg.T)@reg[j]).T
+                dist[j] = linalg.norm(points-curves[j], axis=0)
+            partition = np.argmin(dist, axis=0)
+        # Check if there is no crossing in the first eigenvector
+        ok = True
+        for a, b in comb:
+            signs = (curves[a, 0]-curves[b, 0] > 0)
+            if np.any(np.diff(signs)): # if there is a crossing
+                ok = False
+                # Switch classes
+                mask_a, mask_b = (partition == a), (partition == b)
+                partition[signs & mask_a] = b
+                partition[signs & mask_b] = a
+                comb = comb[1:]+[comb[0]] # avoid starting with the same combination
+                break
+    
+    return partition, (curves, reg, exp_smooth, partition0, n_tries)
