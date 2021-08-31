@@ -88,14 +88,14 @@ def AdaptativeLTS(X, y, h0, beta0, eps=1e-7):
     i_range = np.arange(1, y.size+1)
     # h0 = y.size//2
     beta = LeastTrimmedSquares(X, y, h0, beta0, eps)
-    r = y-X@beta
-    s2 = np.cumsum(r**2)/i_range
-    sigma2 = (np.abs(r[h0-1])/stats.norm.ppf(3/4))**2
+    r2 = np.sort((y-X@beta)**2)
+    s2 = np.cumsum(r2)/i_range
+    sigma2 = r2[h0-1]/(stats.norm.ppf(0.75))**2
     hp, hm = i_range[s2 <= sigma2][-1], h0
     while hp != hm:
         beta = LeastTrimmedSquares(X, y, hp, beta, eps)
-        r = y-X@beta
-        s2 = np.cumsum(r**2)/i_range
+        r2 = np.sort((y-X@beta)**2)
+        s2 = np.cumsum(r2)/i_range
         sigma2 = s2[hp-1]
         hp, hm = i_range[s2 <= sigma2][-1], hp
     return beta
@@ -347,13 +347,16 @@ def classification(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15
         if n_tries == max_tries:
             comb = []
         # Regression
-        for _ in range(2):
+        convergence = False
+        while not convergence:
             for j in range(k):
                 X_reg_j = X_reg[:, partition == j]
                 reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, partition == j].T))
                 curves[j] = ((X_reg.T)@reg[j]).T
                 dist[j] = linalg.norm(points-curves[j], axis=0)
-            partition = np.argmin(dist, axis=0)
+            partition_new = np.argmin(dist, axis=0)
+            convergence = np.all(partition == partition_new)
+            partition = partition_new
         # Check if there is no crossing in the first eigenvector
         ok = True
         for a, b in comb:
@@ -364,7 +367,7 @@ def classification(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15
                 mask_a, mask_b = (partition == a), (partition == b)
                 partition[signs & mask_a] = b
                 partition[signs & mask_b] = a
-                comb = comb[1:]+[comb[0]] # avoid starting with the same combination
+                np.random.shuffle(comb) # avoid starting with the same combination
                 break
     
     return partition, (curves, reg, exp_smooth, partition0, n_tries)
@@ -405,14 +408,14 @@ def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
     
     # First step: ?
     
-    h = np.sum(J, axis=0)
+    h = np.array([n//k for _ in range(k)])
+    h[0] += n-np.sum(h)
     beta0 = np.array([np.eye(df, n_eigvecs)*np.random.randn() for _ in range(k)])
     _, partition = classifLTS(X_reg.T, points.T, h, beta0)
     
     partition0 = partition.copy()
     
     # Second step: projection on the theoretical basis
-    X_reg = basis[idx_basis]
     reg = np.zeros((k, df, n_eigvecs))
     curves = np.zeros((k, n_eigvecs, n))
     dist = np.zeros((k, n))
@@ -425,13 +428,16 @@ def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
         if n_tries == max_tries:
             comb = []
         # Regression
-        for _ in range(2): # à revoir ?
+        convergence = False
+        while not convergence:
             for j in range(k):
                 X_reg_j = X_reg[:, partition == j]
                 reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, partition == j].T))
                 curves[j] = ((X_reg.T)@reg[j]).T
                 dist[j] = linalg.norm(points-curves[j], axis=0)
-            partition = np.argmin(dist, axis=0)
+            partition_new = np.argmin(dist, axis=0)
+            convergence = np.all(partition == partition_new)
+            partition = partition_new
         # Check if there is no crossing in the first eigenvector
         ok = True
         for a, b in comb:
@@ -442,7 +448,7 @@ def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
                 mask_a, mask_b = (partition == a), (partition == b)
                 partition[signs & mask_a] = b
                 partition[signs & mask_b] = a
-                comb = comb[1:]+[comb[0]] # avoid starting with the same combination
+                np.random.shuffle(comb) # avoid starting with the same combination
                 break
     
-    return partition, (curves, reg, exp_smooth, partition0, n_tries)
+    return partition, (curves, reg, partition0, n_tries)
