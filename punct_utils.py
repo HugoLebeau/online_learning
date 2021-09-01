@@ -71,35 +71,6 @@ def smooth(x, y, h, x_out=None):
     K = np.exp(-0.5*cdist(x_out, x, metric='sqeuclidean')/h**2)
     return np.sum(K*y, axis=1)/np.sum(K, axis=1)
 
-def LeastTrimmedSquares(X, y, h, beta0, eps=1e-7):
-    w = np.zeros(y.size)
-    r = y-X@beta0
-    order = np.argsort(np.abs(r))
-    w[order[:h]], w[order[h:]] = 1, 0
-    betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), beta0
-    while linalg.norm(betap-betam) > eps:
-        r = y-X@betap
-        order = np.argsort(np.abs(r))
-        w[order[:h]], w[order[h:]] = 1, 0
-        betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), betap
-    return betap
-
-def AdaptativeLTS(X, y, h0, beta0, eps=1e-7):
-    i_range = np.arange(1, y.size+1)
-    # h0 = y.size//2
-    beta = LeastTrimmedSquares(X, y, h0, beta0, eps)
-    r2 = np.sort((y-X@beta)**2)
-    s2 = np.cumsum(r2)/i_range
-    sigma2 = r2[h0-1]/(stats.norm.ppf(0.75))**2
-    hp, hm = i_range[s2 <= sigma2][-1], h0
-    while hp != hm:
-        beta = LeastTrimmedSquares(X, y, hp, beta, eps)
-        r2 = np.sort((y-X@beta)**2)
-        s2 = np.cumsum(r2)/i_range
-        sigma2 = s2[hp-1]
-        hp, hm = i_range[s2 <= sigma2][-1], hp
-    return beta
-
 def getJ(n, pi):
     ''' Generation of a J matrix '''
     k = len(pi)
@@ -399,6 +370,40 @@ def classifLTS(X, y, h, beta0, eps=1e-7):
             betap[j] = linalg.solve(X_j.T@X_j, X_j.T@y_j)
     return betap, partition
 
+def classifALTS(X, y, k, beta0, eps=1e-7):
+    n = y.shape[0]
+    h = np.array([n//k]*k)
+    h[0] += n-np.sum(h)
+    
+    beta, partition = classifLTS(X, y, h, beta0)
+    
+    r = linalg.norm(y-X@beta0, axis=2)
+    r = np.sort(r, axis=1)
+    
+    i_range = np.arange(1, n+1)
+    s2 = np.cumsum(r**2, axis=1)/i_range
+    sigma2 = (np.median(np.abs(r-np.median(r, axis=1)[:, None]), axis=1)/stats.norm.ppf(0.75))**2
+    
+    hp, hm = np.zeros(k, dtype=int), h
+    for j in range(k):
+        hp[j] = i_range[s2[j] <= sigma2[j]][-1]
+    hp = n*hp//np.sum(hp)
+    hp[0] += n-np.sum(hp)
+    
+    # Loop
+    while np.any(hp != hm):
+        beta, partition = classifLTS(X, y, hp, beta)
+        r2 = np.sum((y-X@beta)**2, axis=2)
+        r2 = np.sort(r2, axis=1)
+        s2 = np.cumsum(r2, axis=1)/i_range
+        for j in range(k):
+            hm[j] = hp[j]
+            hp[j] = i_range[s2[j] <= s2[j, hp[j]]][-1]
+        hp = n*hp//np.sum(hp)
+        hp[0] += n-np.sum(hp)
+    
+    return beta, partition
+
 def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
     n_eigvecs = len(idx_eigvecs) 
     df = len(idx_basis)
@@ -406,12 +411,10 @@ def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
     X_reg = basis[idx_basis]
     points = eigvecs[idx_eigvecs]
     
-    # First step: ?
+    # First step: Adaptative Least Trimmed Squares
     
-    h = np.array([n//k for _ in range(k)])
-    h[0] += n-np.sum(h)
     beta0 = np.array([np.eye(df, n_eigvecs)*np.random.randn() for _ in range(k)])
-    _, partition = classifLTS(X_reg.T, points.T, h, beta0)
+    _, partition = classifALTS(X_reg.T, points.T, k, beta0)
     
     partition0 = partition.copy()
     
