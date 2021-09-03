@@ -71,6 +71,47 @@ def smooth(x, y, h, x_out=None):
     K = np.exp(-0.5*cdist(x_out, x, metric='sqeuclidean')/h**2)
     return np.sum(K*y, axis=1)/np.sum(K, axis=1)
 
+def diff(x, y):
+    n = len(x)
+    diff1, diff2 = np.zeros(n), np.zeros(n)
+    dx, ddx = x[1:]-x[:-1], x[2:]-x[:-2]
+    dy, ddy = y[1:]-y[:-1], y[2:]-y[:-2]
+    diff1[0] = dy[0]/dx[0]
+    diff1[-1] = dy[-1]/dx[-1]
+    diff1[1:-1] = ddy/ddx
+    diff2[0] = (diff1[1]-diff1[0])/dx[0]
+    diff2[-1] = (diff1[-1]-diff1[-2])/dx[-1]
+    diff2[1:-1] = 2*(dx[:-1]*dy[1:]-dx[1:]*dy[:-1])/(dx[1:]*dx[:-1]*ddx)
+    return diff1, diff2
+
+def LeastTrimmedSquares(X, y, h, beta0, eps=1e-7):
+    w = np.zeros(y.size)
+    r = y-X@beta0
+    order = np.argsort(np.abs(r))
+    w[order[:h]], w[order[h:]] = 1, 0
+    betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), beta0
+    while linalg.norm(betap-betam) > eps:
+        r = y-X@betap
+        order = np.argsort(np.abs(r))
+        w[order[:h]], w[order[h:]] = 1, 0
+        betap, betam = linalg.solve((X.T*w)@X, (X.T*w)@y), betap
+    return betap
+
+def AdaptativeLTS(X, y, h0, beta0, eps=1e-7):
+    i_range = np.arange(1, y.size+1)
+    beta = LeastTrimmedSquares(X, y, h0, beta0, eps)
+    r2 = np.sort((y-X@beta)**2)
+    s2 = np.cumsum(r2)/i_range
+    sigma2 = r2[h0-1]/(stats.norm.ppf(0.75))**2
+    hp, hm = i_range[s2 <= sigma2][-1], h0
+    while hp != hm:
+        beta = LeastTrimmedSquares(X, y, hp, beta, eps)
+        r2 = np.sort((y-X@beta)**2)
+        s2 = np.cumsum(r2)/i_range
+        sigma2 = s2[hp-1]
+        hp, hm = i_range[s2 <= sigma2][-1], hp
+    return beta
+
 def getJ(n, pi):
     ''' Generation of a J matrix '''
     k = len(pi)
@@ -455,3 +496,58 @@ def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
                 break
     
     return partition, (curves, reg, partition0, n_tries)
+
+def classification3(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15, h_start=None, max_tries=50):
+    n_eigvecs = len(idx_eigvecs) 
+    df = len(idx_basis)
+    
+    if h_start is None:
+        h_start = 5*k
+    
+    x = np.arange(n)
+    points = eigvecs[idx_eigvecs]
+    partition = -np.ones(n, dtype=int)
+    
+    # First step: pre-classification with an exponential smoothing
+    exp_smooth = np.zeros((n_eigvecs, n))
+    
+    id_prev = -np.ones(k, dtype=int)
+    # Initialisation with Agglomerative Clustering
+    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(points[:, :h_start].T).labels_
+    # Exponential smoothing of the first points
+    for i in range(h_start):
+        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[partition[i]]]
+        id_prev[partition[i]] = i
+    # Pre-classification by minimizing the growth
+    for i in range(h_start, n):
+        growth = linalg.norm(points[:, [i]]-exp_smooth[:, id_prev], axis=0)/(x[i]-x[id_prev])
+        j = np.argmin(growth)
+        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[j]]
+        partition[i] = j
+        id_prev[j] = i
+    
+    partition0 = partition.copy()
+    
+    # Second step: projection on the theoretical basis
+    X_reg = basis[idx_basis]
+    reg = np.zeros((k, df, n_eigvecs))
+    curves = np.zeros((k, n_eigvecs, n))
+    dist = np.zeros((k, n))
+    MAD_scale = stats.norm.ppf(0.75)
+    quant = stats.norm.ppf(0.975)
+    
+    # Regression
+    convergence = False
+    while not convergence:
+        for j in range(k):
+            outliers_j = (dist[j]*MAD_scale > np.median(dist[j, partition == j])*quant)
+            mask_j = (partition == j) & (~outliers_j)
+            X_reg_j = X_reg[:, mask_j]
+            reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, mask_j].T))
+            curves[j] = ((X_reg.T)@reg[j]).T
+            dist[j] = linalg.norm(points-curves[j], axis=0)
+        partition_new = np.argmin(dist, axis=0)
+        convergence = np.all(partition == partition_new)
+        partition = partition_new
+    
+    return partition, (curves, reg, exp_smooth, partition0)
