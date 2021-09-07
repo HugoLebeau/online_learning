@@ -314,15 +314,15 @@ def est_mu(n, p, L, first_spike, psi, mu0=3):
     res = optim.fsolve(func, (mu0**2+1)*psi[-1])
     return np.sqrt(res/psi[-1]-1)
 
-def classification(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15, h_start=None, max_tries=50):
-    n_eigvecs = len(idx_eigvecs) 
-    df = len(idx_basis)
+def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
+    df = basis.shape[0]
+    n_eigvecs = eigvecs.shape[0]
+    n = eigvecs.shape[1]
     
     if h_start is None:
         h_start = 5*k
     
-    x = np.arange(n)
-    points = eigvecs[idx_eigvecs]
+    idx = np.arange(n)
     partition = -np.ones(n, dtype=int)
     
     # First step: pre-classification with an exponential smoothing
@@ -330,222 +330,33 @@ def classification(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15
     
     id_prev = -np.ones(k, dtype=int)
     # Initialisation with Agglomerative Clustering
-    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(points[:, :h_start].T).labels_
+    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:, :h_start].T).labels_
     # Exponential smoothing of the first points
     for i in range(h_start):
-        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[partition[i]]]
+        exp_smooth[:, i] = smooth_par*eigvecs[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[partition[i]]]
         id_prev[partition[i]] = i
     # Pre-classification by minimizing the growth
     for i in range(h_start, n):
-        growth = linalg.norm(points[:, [i]]-exp_smooth[:, id_prev], axis=0)/(x[i]-x[id_prev])
+        growth = linalg.norm(eigvecs[:, [i]]-exp_smooth[:, id_prev], axis=0)/(idx[i]-idx[id_prev])
         j = np.argmin(growth)
-        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[j]]
+        exp_smooth[:, i] = smooth_par*eigvecs[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[j]]
         partition[i] = j
         id_prev[j] = i
     
     partition0 = partition.copy()
     
     # Second step: projection on the theoretical basis
-    X_reg = basis[idx_basis]
     reg = np.zeros((k, df, n_eigvecs))
     curves = np.zeros((k, n_eigvecs, n))
     dist = np.zeros((k, n))
-    comb = list(combinations(range(k), 2))
-    ok = False
-    n_tries = 0
     
-    while not ok and n_tries < max_tries:
-        n_tries += 1
-        if n_tries == max_tries:
-            comb = []
-        # Regression
-        convergence = False
-        while not convergence:
-            for j in range(k):
-                X_reg_j = X_reg[:, partition == j]
-                reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, partition == j].T))
-                curves[j] = ((X_reg.T)@reg[j]).T
-                dist[j] = linalg.norm(points-curves[j], axis=0)
-            partition_new = np.argmin(dist, axis=0)
-            convergence = np.all(partition == partition_new)
-            partition = partition_new
-        # Check if there is no crossing in the first eigenvector
-        ok = True
-        for a, b in comb:
-            signs = (curves[a, 0]-curves[b, 0] > 0)
-            if np.any(np.diff(signs)): # if there is a crossing
-                ok = False
-                # Switch classes
-                mask_a, mask_b = (partition == a), (partition == b)
-                partition[signs & mask_a] = b
-                partition[signs & mask_b] = a
-                np.random.shuffle(comb) # avoid starting with the same combination
-                break
-    
-    return partition, (curves, reg, exp_smooth, partition0, n_tries)
-
-def classifLTS(X, y, h, beta0, eps=1e-7):
-    n, k = y.shape[0], len(h)
-    partition = -np.ones(n, dtype=int)
-    betap, betam = np.zeros(beta0.shape), beta0
-
-    r2 = np.sum((y-X@beta0)**2, axis=2)
-    order = np.argsort(r2, axis=1)
-    free = np.ones(n, dtype=bool)
-    for j in range(k):
-        idx = order[j][free[order[j]]][:h[j]]
-        partition[idx] = j
-        free[idx] = False
-        X_j, y_j = X[partition == j], y[partition == j]
-        betap[j] = linalg.solve(X_j.T@X_j, X_j.T@y_j)
-    while linalg.norm(betap-betam) > eps:
-        r2 = np.sum((y-X@betap)**2, axis=2)
-        order = np.argsort(r2, axis=1)
-        free[:], partition[:] = True, -1
-        for j in range(k):
-            idx = order[j][free[order[j]]][:h[j]]
-            partition[idx] = j
-            free[idx] = False
-            X_j, y_j = X[partition == j], y[partition == j]
-            betam[j] = betap[j]
-            betap[j] = linalg.solve(X_j.T@X_j, X_j.T@y_j)
-    return betap, partition
-
-def classifALTS(X, y, k, beta0, eps=1e-7):
-    n = y.shape[0]
-    h = np.array([n//k]*k)
-    h[0] += n-np.sum(h)
-    
-    beta, partition = classifLTS(X, y, h, beta0)
-    
-    r = linalg.norm(y-X@beta0, axis=2)
-    r = np.sort(r, axis=1)
-    
-    i_range = np.arange(1, n+1)
-    s2 = np.cumsum(r**2, axis=1)/i_range
-    sigma2 = (np.median(np.abs(r-np.median(r, axis=1)[:, None]), axis=1)/stats.norm.ppf(0.75))**2
-    
-    hp, hm = np.zeros(k, dtype=int), h
-    for j in range(k):
-        hp[j] = i_range[s2[j] <= sigma2[j]][-1]
-    hp = n*hp//np.sum(hp)
-    hp[0] += n-np.sum(hp)
-    
-    # Loop
-    while np.any(hp != hm):
-        beta, partition = classifLTS(X, y, hp, beta)
-        r2 = np.sum((y-X@beta)**2, axis=2)
-        r2 = np.sort(r2, axis=1)
-        s2 = np.cumsum(r2, axis=1)/i_range
-        for j in range(k):
-            hm[j] = hp[j]
-            hp[j] = i_range[s2[j] <= s2[j, hp[j]]][-1]
-        hp = n*hp//np.sum(hp)
-        hp[0] += n-np.sum(hp)
-    
-    return beta, partition
-
-def classification2(n, k, eigvecs, idx_eigvecs, basis, idx_basis, max_tries=50):
-    n_eigvecs = len(idx_eigvecs) 
-    df = len(idx_basis)
-    
-    X_reg = basis[idx_basis]
-    points = eigvecs[idx_eigvecs]
-    
-    # First step: Adaptative Least Trimmed Squares
-    
-    beta0 = np.array([np.eye(df, n_eigvecs)*np.random.randn() for _ in range(k)])
-    _, partition = classifALTS(X_reg.T, points.T, k, beta0)
-    
-    partition0 = partition.copy()
-    
-    # Second step: projection on the theoretical basis
-    reg = np.zeros((k, df, n_eigvecs))
-    curves = np.zeros((k, n_eigvecs, n))
-    dist = np.zeros((k, n))
-    comb = list(combinations(range(k), 2))
-    ok = False
-    n_tries = 0
-    
-    while not ok and n_tries < max_tries:
-        n_tries += 1
-        if n_tries == max_tries:
-            comb = []
-        # Regression
-        convergence = False
-        while not convergence:
-            for j in range(k):
-                X_reg_j = X_reg[:, partition == j]
-                reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, partition == j].T))
-                curves[j] = ((X_reg.T)@reg[j]).T
-                dist[j] = linalg.norm(points-curves[j], axis=0)
-            partition_new = np.argmin(dist, axis=0)
-            convergence = np.all(partition == partition_new)
-            partition = partition_new
-        # Check if there is no crossing in the first eigenvector
-        ok = True
-        for a, b in comb:
-            signs = (curves[a, 0]-curves[b, 0] > 0)
-            if np.any(np.diff(signs)): # if there is a crossing
-                ok = False
-                # Switch classes
-                mask_a, mask_b = (partition == a), (partition == b)
-                partition[signs & mask_a] = b
-                partition[signs & mask_b] = a
-                np.random.shuffle(comb) # avoid starting with the same combination
-                break
-    
-    return partition, (curves, reg, partition0, n_tries)
-
-def classification3(n, k, eigvecs, idx_eigvecs, basis, idx_basis, smooth_par=0.15, h_start=None, max_tries=50):
-    n_eigvecs = len(idx_eigvecs) 
-    df = len(idx_basis)
-    
-    if h_start is None:
-        h_start = 5*k
-    
-    x = np.arange(n)
-    points = eigvecs[idx_eigvecs]
-    partition = -np.ones(n, dtype=int)
-    
-    # First step: pre-classification with an exponential smoothing
-    exp_smooth = np.zeros((n_eigvecs, n))
-    
-    id_prev = -np.ones(k, dtype=int)
-    # Initialisation with Agglomerative Clustering
-    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(points[:, :h_start].T).labels_
-    # Exponential smoothing of the first points
-    for i in range(h_start):
-        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[partition[i]]]
-        id_prev[partition[i]] = i
-    # Pre-classification by minimizing the growth
-    for i in range(h_start, n):
-        growth = linalg.norm(points[:, [i]]-exp_smooth[:, id_prev], axis=0)/(x[i]-x[id_prev])
-        j = np.argmin(growth)
-        exp_smooth[:, i] = smooth_par*points[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[j]]
-        partition[i] = j
-        id_prev[j] = i
-    
-    partition0 = partition.copy()
-    
-    # Second step: projection on the theoretical basis
-    X_reg = basis[idx_basis]
-    reg = np.zeros((k, df, n_eigvecs))
-    curves = np.zeros((k, n_eigvecs, n))
-    dist = np.zeros((k, n))
-    MAD_scale = stats.norm.ppf(0.75)
-    quant = stats.norm.ppf(0.975)
-    
-    # Regression
     convergence = False
     while not convergence:
         for j in range(k):
-            outliers_j = (dist[j]*MAD_scale > np.median(dist[j, partition == j])*quant)
-            mask_j = (partition == j) & (~outliers_j)
-            X_reg_j = X_reg[:, mask_j]
-            reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(points[:, mask_j].T))
-            curves[j] = ((X_reg.T)@reg[j]).T
-            dist[j] = linalg.norm(points-curves[j], axis=0)
+            X_reg_j = basis[:, partition == j]
+            reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(eigvecs[:, partition == j].T))
+            curves[j] = ((basis.T)@reg[j]).T
+            dist[j] = linalg.norm(eigvecs-curves[j], axis=0)
         partition_new = np.argmin(dist, axis=0)
         convergence = np.all(partition == partition_new)
         partition = partition_new
