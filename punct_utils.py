@@ -3,11 +3,9 @@ import numpy as np
 import scipy.linalg as linalg
 import scipy.optimize as optim
 import scipy.stats as stats
-from itertools import combinations
 from time import time
 from tqdm import tqdm
 from scipy.sparse.linalg import eigsh
-from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
 
 khi = -0.21723362821122165741 # minimum of the Dirichlet kernel
