@@ -241,7 +241,7 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     exp_smooth = np.zeros((n_eigvecs, n))
     
     id_prev = -np.ones(k, dtype=int)
-    # Initialisation with Agglomerative Clustering
+    # Initialisation with agglomerative clustering
     partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:, :h_start].T).labels_
     # Exponential smoothing of the first points
     for i in range(h_start):
