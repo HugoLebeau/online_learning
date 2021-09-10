@@ -5,6 +5,7 @@ import scipy.optimize as optim
 import scipy.stats as stats
 from time import time
 from tqdm import tqdm
+from scipy.sparse import dia_matrix
 from scipy.sparse.linalg import eigsh
 from sklearn.cluster import AgglomerativeClustering
 
@@ -226,51 +227,142 @@ def est_mu(n, p, L, first_spike, psi, mu0=3):
     res = optim.fsolve(func, (mu0**2+1)*psi[-1])
     return np.sqrt(res/psi[-1]-1)
 
-def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
-    df = basis.shape[0]
-    n_eigvecs = eigvecs.shape[0]
-    n = eigvecs.shape[1]
-    
-    if h_start is None:
-        h_start = 5*k
-    
-    idx = np.arange(n)
-    partition = -np.ones(n, dtype=int)
-    
-    # First step: pre-classification with an exponential smoothing
-    exp_smooth = np.zeros((n_eigvecs, n))
-    
-    id_prev = -np.ones(k, dtype=int)
-    # Initialisation with agglomerative clustering
-    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:, :h_start].T).labels_
-    # Exponential smoothing of the first points
-    for i in range(h_start):
-        exp_smooth[:, i] = smooth_par*eigvecs[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[partition[i]]]
+
+# CLASSIFICATION FUNCTIONS
+
+def init_pre_classif(k, eigvecs, basis, h_start, smooth_par, partition, exp_smooth, id_prev):
+    ''' Initialisation of the first step of the classification algorithm using agglomerative clustering '''
+    partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:h_start]).labels_
+    for i in range(h_start): # exponential smoothing of the first points
+        exp_smooth[i] = smooth_par*eigvecs[i]+(1-smooth_par)*exp_smooth[id_prev[partition[i]]]
         id_prev[partition[i]] = i
-    # Pre-classification by minimizing the growth
-    for i in range(h_start, n):
-        growth = linalg.norm(eigvecs[:, [i]]-exp_smooth[:, id_prev], axis=0)/(idx[i]-idx[id_prev])
-        j = np.argmin(growth)
-        exp_smooth[:, i] = smooth_par*eigvecs[:, i]+(1-smooth_par)*exp_smooth[:, id_prev[j]]
-        partition[i] = j
-        id_prev[j] = i
-    
-    partition0 = partition.copy()
-    
-    # Second step: projection on the theoretical basis
-    reg = np.zeros((k, df, n_eigvecs))
-    curves = np.zeros((k, n_eigvecs, n))
-    dist = np.zeros((k, n))
-    
+
+def pre_classif_step(i, k, eigvecs, basis, smooth_par, partition, exp_smooth, id_prev):
+    ''' Iteration of the first step of the classification algorithm '''
+    growth = linalg.norm(eigvecs[[i]]-exp_smooth[id_prev], axis=1)/(i-id_prev)
+    j = np.argmin(growth)
+    exp_smooth[i] = smooth_par*eigvecs[i]+(1-smooth_par)*exp_smooth[id_prev[j]]
+    partition[i] = j
+    id_prev[j] = i
+
+def classif_reg(k, eigvecs, basis, partition, reg, curves, dist):
+    ''' Second step of the classification algorithm '''
     convergence = False
     while not convergence:
         for j in range(k):
-            X_reg_j = basis[:, partition == j]
-            reg[j] = linalg.solve(X_reg_j@(X_reg_j.T), X_reg_j@(eigvecs[:, partition == j].T))
-            curves[j] = ((basis.T)@reg[j]).T
-            dist[j] = linalg.norm(eigvecs-curves[j], axis=0)
+            X_reg_j = basis[partition == j]
+            reg[j] = linalg.solve((X_reg_j.T)@X_reg_j, (X_reg_j.T)@eigvecs[partition == j])
+            curves[j] = basis@reg[j]
+            dist[j] = linalg.norm(eigvecs-curves[j], axis=1)
         partition_new = np.argmin(dist, axis=0)
         convergence = np.all(partition == partition_new)
         partition = partition_new
+    return partition
+
+def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
+    eigvecs = eigvecs.T
+    basis = basis.T
     
-    return partition, (curves, reg, exp_smooth, partition0)
+    n = eigvecs.shape[0]
+    n_eigvecs = eigvecs.shape[1]
+    df = basis.shape[1]
+    
+    if h_start is None:
+        h_start = 10*k
+    
+    partition0 = -np.ones(n, dtype=int)
+    
+    # First step: pre-classification with an exponential smoothing
+    exp_smooth = np.zeros((n, n_eigvecs))
+    id_prev = -np.ones(k, dtype=int)
+    init_pre_classif(k, eigvecs, basis, h_start, smooth_par, partition0, exp_smooth, id_prev)
+    for i in range(h_start, n):
+        pre_classif_step(i, k, eigvecs, basis, smooth_par, partition0, exp_smooth, id_prev)
+    
+    # Second step: projection on the theoretical basis
+    reg = np.zeros((k, df, n_eigvecs)) # regression coefficients of each class
+    curves = np.zeros((k, n, n_eigvecs)) # curve associated to each class
+    dist = np.zeros((k, n)) # distance of each point to each class
+    
+    partition = classif_reg(k, eigvecs, basis, partition0, reg, curves, dist)
+    
+    return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
+
+def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None):
+    basis = basis.T
+    
+    T, k = J.shape
+    n, df = basis.shape
+    p = M.shape[0]
+    rk = np.arange(k)[None, :]
+    
+    if h_start is None:
+        h_start = 10*k
+    
+    P = M@(J.T) # signal
+    Z = stats.norm.rvs(size=(p, T)) # noise
+    X = Z+P # observation
+    
+    # Initialisation
+    K_data = np.zeros((T, L)) # sparse kernel matrix, (n, L) in practice
+    lbda = np.zeros((T, n_eigvecs)) # top eigenvalues
+    w = np.ones((T, n, n_eigvecs)) # top eigenvectors
+    
+    exp_smooth = np.zeros((n, n_eigvecs)) # exponential smoothing of the first n points
+    id_prev = -np.ones(k, dtype=int) # position of the last point seen of each class (used for exponential smoothing only)
+    partition0 = -np.ones(n, dtype=int) # pre-classification of the first n points
+    partition = -np.ones((T, n), dtype=int) # classification of the last n points
+    class_count = np.zeros((T, k), dtype=int) # class_count[t, j] = number of times point x_t is classified in class j
+    reg = np.zeros((k, df, n_eigvecs)) # regression coefficients of each class
+    curves = np.zeros((T, k, n, n_eigvecs)) # curve associated to each class
+    dist = np.zeros((k, n)) # distance of each point to each class
+    
+    time_ite = np.zeros(T)
+    
+    def make_K(K_data):
+        data_u = K_data.T
+        offsets_u = np.arange(L)
+        K_u = dia_matrix((data_u, offsets_u), shape=(n, n))
+        data_l = K_data[:, 1:].T
+        offsets_l = np.arange(1, L)
+        K_l = dia_matrix((data_l, offsets_l), shape=(n, n)).T
+        return K_u+K_l
+    
+    # Streaming
+    for t in tqdm(range(T)):
+        tic = time()
+        
+        tL = max(0, t-L+1) # time of oldest kept point (at most L points can be kept)
+        K_data[t, :t-tL+1] = (X[:, t]@X[:, tL:t+1]/p)[::-1] # compute kernel data
+        t_obs = max(0, t-n+1) # time of oldest clustered point (at most n points can be clustered)
+        K = make_K(K_data[t_obs:t_obs+n]) # make the (n, n) sparse kernel matrix
+        
+        # Compute top eigenpairs
+        if t < n_eigvecs:
+            lbda[t, -t-1:], w[t, :, -t-1:] = eigsh(K, k=t+1, v0=w[t-1, :, 0], which='LA')
+        else:
+            lbda[t], w[t] = eigsh(K, k=n_eigvecs, v0=w[t-1, :, 0], which='LA')
+        
+        # Sign correction on eigenvectors
+        if t >= n:
+            w[t] *= np.sign(np.sum(w[t, :-1]*w[t-1, 1:], axis=0))
+        elif t > 0:
+            w[t] *= np.sign(np.sum(w[t]*w[t-1], axis=0))
+        
+        # Classification
+        if t < n: # warm-up
+            if t == h_start: # initialisation with agglomerative clustering
+                init_pre_classif(k, w[t], basis, h_start, smooth_par, partition0, exp_smooth, id_prev)
+            elif t > h_start: # pre-classification by minimizing the growth
+                pre_classif_step(t, k, w[t], basis, smooth_par, partition0, exp_smooth, id_prev)
+            if t == n-1: # end of warm-up
+                partition[t] = classif_reg(k, w[t], basis, partition0, reg, curves[t], dist)
+                class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
+        else:
+            partition[t] = classif_reg(k, w[t], basis, np.roll(partition[t-1], -1), reg, curves[t], dist)
+            class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
+        
+        toc = time()
+        time_ite[t] = toc-tic
+    
+    return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth.T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
