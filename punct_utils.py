@@ -172,7 +172,7 @@ def simul(nbMC, L, M, J, mask='toeplitz', comp=False, verbose=True):
     
     return eigvals, eigvecs
 
-def eta0(axr, n, p, L, psi, y=1e-6, delta=1e-6, verbose=True):
+def eta0(axr, p, psi, y=1e-6, delta=1e-6, verbose=True):
     ''' 1/(1-z-eta0) is the Stieltjes transform for a circulant/Toeplitz mask '''
     eta0 = np.zeros(axr.shape, dtype='complex')
     eta0[-1] = 1j
@@ -221,7 +221,7 @@ def get_spikes(n, p, L, mu_norm, tau=None):
     
     return res_c, res_t
 
-def est_mu(n, p, L, first_spike, psi, mu0=3):
+def est_mu(p, first_spike, psi, mu0=3):
     ''' Estimation of ||mu|| with the first spike for a circulant/Toeplitz mask '''
     func = lambda x: x*(1+p*np.mean(psi/(x-psi)))/p-first_spike
     res = optim.fsolve(func, (mu0**2+1)*psi[-1])
@@ -230,14 +230,14 @@ def est_mu(n, p, L, first_spike, psi, mu0=3):
 
 # CLASSIFICATION FUNCTIONS
 
-def init_pre_classif(k, eigvecs, basis, h_start, smooth_par, partition, exp_smooth, id_prev):
+def init_pre_classif(k, eigvecs, h_start, smooth_par, partition, exp_smooth, id_prev):
     ''' Initialisation of the first step of the classification algorithm using agglomerative clustering '''
     partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:h_start]).labels_
     for i in range(h_start): # exponential smoothing of the first points
         exp_smooth[i] = smooth_par*eigvecs[i]+(1-smooth_par)*exp_smooth[id_prev[partition[i]]]
         id_prev[partition[i]] = i
 
-def pre_classif_step(i, k, eigvecs, basis, smooth_par, partition, exp_smooth, id_prev):
+def pre_classif_step(i, eigvecs, smooth_par, partition, exp_smooth, id_prev):
     ''' Iteration of the first step of the classification algorithm '''
     growth = linalg.norm(eigvecs[[i]]-exp_smooth[id_prev], axis=1)/(i-id_prev)
     j = np.argmin(growth)
@@ -260,6 +260,7 @@ def classif_reg(k, eigvecs, basis, partition, reg, curves, dist):
     return partition
 
 def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
+    ''' Classification algorithm '''
     eigvecs = eigvecs.T
     basis = basis.T
     
@@ -275,9 +276,9 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     # First step: pre-classification with an exponential smoothing
     exp_smooth = np.zeros((n, n_eigvecs))
     id_prev = -np.ones(k, dtype=int)
-    init_pre_classif(k, eigvecs, basis, h_start, smooth_par, partition0, exp_smooth, id_prev)
+    init_pre_classif(k, eigvecs, h_start, smooth_par, partition0, exp_smooth, id_prev)
     for i in range(h_start, n):
-        pre_classif_step(i, k, eigvecs, basis, smooth_par, partition0, exp_smooth, id_prev)
+        pre_classif_step(i, eigvecs, smooth_par, partition0, exp_smooth, id_prev)
     
     # Second step: projection on the theoretical basis
     reg = np.zeros((k, df, n_eigvecs)) # regression coefficients of each class
@@ -288,7 +289,8 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     
     return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
 
-def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None):
+def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, divided_warmup=True):
+    ''' Streaming simulation with on-line classification '''
     basis = basis.T
     
     T, k = J.shape
@@ -350,19 +352,27 @@ def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None):
             w[t] *= np.sign(np.sum(w[t]*w[t-1], axis=0))
         
         # Classification
-        if t < n: # warm-up
+        if divided_warmup and t < n: # warm-up
             if t == h_start: # initialisation with agglomerative clustering
-                init_pre_classif(k, w[t], basis, h_start, smooth_par, partition0, exp_smooth, id_prev)
+                init_pre_classif(k, w[t], h_start, smooth_par, partition0, exp_smooth, id_prev)
             elif t > h_start: # pre-classification by minimizing the growth
-                pre_classif_step(t, k, w[t], basis, smooth_par, partition0, exp_smooth, id_prev)
-            if t == n-1: # end of warm-up
-                partition[t] = classif_reg(k, w[t], basis, partition0, reg, curves[t], dist)
-                class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
-        else:
+                pre_classif_step(t, w[t], smooth_par, partition0, exp_smooth, id_prev)
+        if t == n-1:
+            if not divided_warmup: # do warm-up at once
+                init_pre_classif(k, w[t], h_start, smooth_par, partition0, exp_smooth, id_prev)
+                for i in range(h_start, n):
+                    pre_classif_step(i, w[t], smooth_par, partition0, exp_smooth, id_prev)
+            # End of warm-up
+            partition[t] = classif_reg(k, w[t], basis, partition0, reg, curves[t], dist)
+            class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
+        elif t >= n:
             partition[t] = classif_reg(k, w[t], basis, np.roll(partition[t-1], -1), reg, curves[t], dist)
             class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
         
         toc = time()
         time_ite[t] = toc-tic
     
-    return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth.T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
+    return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth[:, ::-1].T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
+
+if __name__ == "__main__":
+    print("TEST")
