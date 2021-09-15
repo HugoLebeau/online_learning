@@ -18,6 +18,7 @@ args = parser.parse_args()
 path = args.file+'/'+args.im_class+"_{}"
 use_cuda = torch.cuda.is_available()
 torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 
 model_gan = BigGAN.from_pretrained('biggan-deep-256')
 model_vgg = models.vgg19(pretrained=True)
