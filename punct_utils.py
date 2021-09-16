@@ -306,7 +306,7 @@ def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, di
     X = Z+P # observation
     
     # Initialisation
-    K_data = np.zeros((T, L)) # sparse kernel matrix, (n, L) in practice
+    K_data = np.zeros((n, L)) # sparse kernel matrix
     lbda = np.zeros((T, n_eigvecs)) # top eigenvalues
     w = np.ones((T, n, n_eigvecs)) # top eigenvectors
     
@@ -334,10 +334,13 @@ def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, di
     for t in tqdm(range(T)):
         tic = time()
         
-        tL = max(0, t-L+1) # time of oldest kept point (at most L points can be kept)
-        K_data[t, :t-tL+1] = (X[:, t]@X[:, tL:t+1]/p)[::-1] # compute kernel data
-        t_obs = max(0, t-n+1) # time of oldest clustered point (at most n points can be clustered)
-        K = make_K(K_data[t_obs:t_obs+n]) # make the (n, n) sparse kernel matrix
+        # Compute kernel data
+        if t < n:
+            K_data[t, :t+1] = (X[:, t]@X[:, max(0, t-L+1):t+1]/p)[::-1]
+        else:
+            K_data = np.roll(K_data, -1, axis=0)
+            K_data[-1] = (X[:, t]@X[:, max(0, t-L+1):t+1]/p)[::-1]
+        K = make_K(K_data) # make the (n, n) sparse kernel matrix
         
         # Compute top eigenpairs
         if t < n_eigvecs:
@@ -364,15 +367,12 @@ def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, di
                     pre_classif_step(i, w[t], smooth_par, partition0, exp_smooth, id_prev)
             # End of warm-up
             partition[t] = classif_reg(k, w[t], basis, partition0, reg, curves[t], dist)
-            class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
+            class_count[max(0, t-n+1):t+1][rk == partition[t][:, None]] += 1
         elif t >= n:
             partition[t] = classif_reg(k, w[t], basis, np.roll(partition[t-1], -1), reg, curves[t], dist)
-            class_count[t_obs:t+1][rk == partition[t][:, None]] += 1
+            class_count[max(0, t-n+1):t+1][rk == partition[t][:, None]] += 1
         
         toc = time()
         time_ite[t] = toc-tic
     
     return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth[:, ::-1].T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
-
-if __name__ == "__main__":
-    print("TEST")
