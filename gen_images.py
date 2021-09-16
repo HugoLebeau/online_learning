@@ -28,6 +28,8 @@ if use_cuda:
 model_gan.eval()
 model_vgg.eval()
 
+model_vgg.classifier = model_vgg.classifier[0] # remove last layers
+
 features_file = open(args.file+'/'+args.im_class+'_features.csv', 'w')
 
 scale = transforms.Resize((224, 224)) # VGG input size
@@ -47,7 +49,7 @@ for ite in tqdm(range(args.n_images//args.batch_size)):
     # Generate an image
     with torch.no_grad():
         image = model_gan(noise_vector, class_vector, args.truncation)
-        features = model_vgg.features(norm(scale(image)))
+        features = model_vgg(norm(scale(image)))
     
     if use_cuda:
         image = image.to('cpu')
@@ -55,6 +57,6 @@ for ite in tqdm(range(args.n_images//args.batch_size)):
     
     # Save results
     save_as_images(image, file_name=path.format(ite))
-    np.savetxt(features_file, torch.flatten(features, 1, -1).numpy())
+    np.savetxt(features_file, features.numpy())
 
 features_file.close()
