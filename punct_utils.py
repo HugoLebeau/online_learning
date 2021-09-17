@@ -3,6 +3,7 @@ import numpy as np
 import scipy.linalg as linalg
 import scipy.optimize as optim
 import scipy.stats as stats
+from itertools import permutations
 from time import time
 from tqdm import tqdm
 from scipy.sparse import dia_matrix
@@ -37,6 +38,15 @@ def getJ(n, pi):
         sum_n += ni
     np.random.shuffle(J)
     return J
+
+def get_classif_error(k, partition, true_partition):
+    ''' Compute classification error '''
+    permut = np.array(list(permutations(range(k))))
+    c_err_list = [np.mean(pp[partition] != true_partition) for pp in permut]
+    per = permut[np.argmin(c_err_list)]
+    per_inv = np.argsort(per)
+    c_err = np.min(c_err_list)
+    return c_err, per, per_inv
 
 
 # BERNOULLI MASK
@@ -288,24 +298,15 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     partition = classif_reg(k, eigvecs, basis, partition0, reg, curves, dist)
     
     return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
-
-def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, divided_warmup=True):
-    ''' Streaming simulation with on-line classification '''
+    
+def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup):
+    ''' Streaming with on-line classification '''
     basis = basis.T
-    
-    T, k = J.shape
-    n, df = basis.shape
-    p = M.shape[0]
     rk = np.arange(k)[None, :]
-    
-    if h_start is None:
-        h_start = 10*k
-    
-    P = M@(J.T) # signal
-    Z = stats.norm.rvs(size=(p, T)) # noise
-    X = Z+P # observation
+    n, df = basis.shape
     
     # Initialisation
+    data = np.zeros((L, p)) # data pipeline
     K_data = np.zeros((n, L)) # sparse kernel matrix
     lbda = np.zeros((T, n_eigvecs)) # top eigenvalues
     w = np.ones((T, n, n_eigvecs)) # top eigenvectors
@@ -334,12 +335,16 @@ def simul_streaming(L, M, J, n_eigvecs, basis, smooth_par=0.15, h_start=None, di
     for t in tqdm(range(T)):
         tic = time()
         
+        # Get a new point in the pipeline
+        data = np.roll(data, 1, axis=0)
+        data[0] = get_data(t)
+        
         # Compute kernel data
         if t < n:
-            K_data[t, :t+1] = (X[:, t]@X[:, max(0, t-L+1):t+1]/p)[::-1]
+            K_data[t] = data@data[0]/p
         else:
             K_data = np.roll(K_data, -1, axis=0)
-            K_data[-1] = (X[:, t]@X[:, max(0, t-L+1):t+1]/p)[::-1]
+            K_data[-1] = data@data[0]/p
         K = make_K(K_data) # make the (n, n) sparse kernel matrix
         
         # Compute top eigenpairs
