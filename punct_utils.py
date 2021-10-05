@@ -3,7 +3,7 @@ import numpy as np
 import scipy.linalg as linalg
 import scipy.optimize as optim
 import scipy.stats as stats
-from itertools import permutations
+from itertools import combinations, permutations
 from time import time
 from tqdm import tqdm
 from scipy.sparse import dia_matrix
@@ -244,14 +244,16 @@ def init_pre_classif(k, eigvecs, h_start, smooth_par, partition, exp_smooth, id_
     ''' Initialisation of the first step of the classification algorithm using agglomerative clustering '''
     partition[:h_start] = AgglomerativeClustering(n_clusters=k).fit(eigvecs[:h_start]).labels_
     for i in range(h_start): # exponential smoothing of the first points
-        exp_smooth[i] = smooth_par*eigvecs[i]+(1-smooth_par)*exp_smooth[id_prev[partition[i]]]
+        memory = ((1-smooth_par)/(i-id_prev))*(1+((1-smooth_par)/smooth_par)*(1-(1-smooth_par)**(i-id_prev-1)))
+        exp_smooth[i] = (smooth_par*eigvecs[i]+memory[partition[i]]*exp_smooth[id_prev[partition[i]]])/(smooth_par+memory[partition[i]])
         id_prev[partition[i]] = i
 
 def pre_classif_step(i, eigvecs, smooth_par, partition, exp_smooth, id_prev):
     ''' Iteration of the first step of the classification algorithm '''
-    growth = linalg.norm(eigvecs[[i]]-exp_smooth[id_prev], axis=1)/(i-id_prev)
+    memory = ((1-smooth_par)/(i-id_prev))*(1+((1-smooth_par)/smooth_par)*(1-(1-smooth_par)**(i-id_prev-1)))
+    growth = linalg.norm(eigvecs[[i]]-exp_smooth[id_prev], axis=1)/((1+memory/smooth_par)*(i-id_prev))
     j = np.argmin(growth)
-    exp_smooth[i] = smooth_par*eigvecs[i]+(1-smooth_par)*exp_smooth[id_prev[j]]
+    exp_smooth[i] = (smooth_par*eigvecs[i]+memory[j]*exp_smooth[id_prev[j]])/(smooth_par+memory[j])
     partition[i] = j
     id_prev[j] = i
 
@@ -267,6 +269,28 @@ def classif_reg(k, eigvecs, basis, partition, reg, curves, dist):
         partition_new = np.argmin(dist, axis=0)
         convergence = np.all(partition == partition_new)
         partition = partition_new
+    return partition
+
+def classif_reg_with_correction(k, eigvecs, basis, partition, reg, curves, dist):
+    partition = classif_reg(k, eigvecs, basis, partition, reg, curves, dist)
+    
+    scores = [np.sum(np.take_along_axis(dist, partition[None, :], axis=0))]
+    settings = [(partition.copy(), reg.copy(), curves.copy())]
+    
+    comb = list(combinations(range(k), 2))
+    for a, b in comb:
+        signs = (settings[0][2][a, :, 0]-settings[0][2][b, :, 0] > 0) # check crossing between curves
+        if np.any(np.diff(signs)): # if there is a crossing
+            partition = settings[0][0]
+            # Switch classes
+            mask_a, mask_b = (partition == a), (partition == b)
+            partition[signs & mask_a] = b
+            partition[signs & mask_b] = a
+            # New partition
+            partition = classif_reg(k, eigvecs, basis, partition, reg, curves, dist)
+            scores.append(np.sum(np.take_along_axis(dist, partition[None, :], axis=0)))
+            settings.append((partition.copy(), reg.copy(), curves.copy()))
+    partition, reg, curves = settings[np.argmin(scores)]
     return partition
 
 def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
@@ -295,7 +319,7 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     curves = np.zeros((k, n, n_eigvecs)) # curve associated to each class
     dist = np.zeros((k, n)) # distance of each point to each class
     
-    partition = classif_reg(k, eigvecs, basis, partition0, reg, curves, dist)
+    partition = classif_reg_with_correction(k, eigvecs, basis, partition0, reg, curves, dist)
     
     return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
     
@@ -381,3 +405,54 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
         time_ite[t] = toc-tic
     
     return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth[:, ::-1].T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
+
+def easy_streaming(get_data, T, n, p, L, k):
+    ''' Streaming with on-line classification '''
+    rk = np.arange(k)[None, :]
+    
+    # Initialisation
+    data = np.zeros((L, p)) # data pipeline
+    K_data = np.zeros((n, L)) # sparse kernel matrix
+    lbda = np.zeros(T) # top eigenvalue
+    w = np.ones((T, n, 1)) # top eigenvector
+    
+    partition = -np.ones((T, n), dtype=int) # classification of the last n points
+    class_count = np.zeros((T, k), dtype=int) # class_count[t, j] = number of times point x_t is classified in class j
+    
+    time_ite = np.zeros(T)
+    
+    def make_K(K_data):
+        data_u = K_data.T
+        offsets_u = np.arange(L)
+        K_u = dia_matrix((data_u, offsets_u), shape=(n, n))
+        data_l = K_data[:, 1:].T
+        offsets_l = np.arange(1, L)
+        K_l = dia_matrix((data_l, offsets_l), shape=(n, n)).T
+        return K_u+K_l
+    
+    # Streaming
+    for t in tqdm(range(T)):
+        tic = time()
+        
+        # Get a new point in the pipeline
+        data = np.roll(data, 1, axis=0)
+        data[0] = get_data(t)
+        
+        # Compute kernel data
+        if t < n:
+            K_data[t] = data@data[0]/p
+        else:
+            K_data = np.roll(K_data, -1, axis=0)
+            K_data[-1] = data@data[0]/p
+        K = make_K(K_data) # make the (n, n) sparse kernel matrix
+        
+        if t >= n:
+            lbda[t], w[t] = eigsh(K, k=1, v0=w[t-1], which='LA') # compute top eigenpair
+            w[t] *= np.sign(np.sum(w[t, :-1]*w[t-1, 1:])) # sign correction on eigenvectors
+            partition[t] = (w[t, :, 0] > 0).astype(int) # classification
+            class_count[max(0, t-n+1):t+1][rk == partition[t][:, None]] += 1
+        
+        toc = time()
+        time_ite[t] = toc-tic
+    
+    return class_count, (lbda, w[:, :, 0], partition, time_ite)
