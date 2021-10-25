@@ -13,10 +13,12 @@ for f in tqdm(features_files):
 all_features = np.concatenate(features, axis=0)
 
 mean = np.mean(all_features, axis=0)
-cov = (all_features.T)@all_features/all_features.shape[0]
+centered_features = all_features-mean
+cov = (centered_features.T)@centered_features/centered_features.shape[0]
+sqrt_cov = linalg.sqrtm(cov)
 
 output = [open(file+'{}_normalized.csv'.format(cl), 'w') for cl in classes]
 
 for f, o in tqdm(zip(features, output)):
-    np.savetxt(o, linalg.solve(cov, f.T-mean[:, None]).T)
+    np.savetxt(o, linalg.solve(sqrt_cov, (f-mean).T).T)
     o.close()
