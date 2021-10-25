@@ -272,6 +272,7 @@ def classif_reg(k, eigvecs, basis, partition, reg, curves, dist):
     return partition
 
 def classif_reg_with_correction(k, eigvecs, basis, partition, reg, curves, dist):
+    ''' Second step of the classification algorithm with a switch correction '''
     partition = classif_reg(k, eigvecs, basis, partition, reg, curves, dist)
     
     scores = [np.sum(np.take_along_axis(dist, partition[None, :], axis=0))]
@@ -293,7 +294,7 @@ def classif_reg_with_correction(k, eigvecs, basis, partition, reg, curves, dist)
     partition, reg, curves = settings[np.argmin(scores)]
     return partition
 
-def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
+def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=True):
     ''' Classification algorithm '''
     eigvecs = eigvecs.T
     basis = basis.T
@@ -319,11 +320,14 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None):
     curves = np.zeros((k, n, n_eigvecs)) # curve associated to each class
     dist = np.zeros((k, n)) # distance of each point to each class
     
-    partition = classif_reg_with_correction(k, eigvecs, basis, partition0, reg, curves, dist)
+    if correction:
+        partition = classif_reg_with_correction(k, eigvecs, basis, partition0, reg, curves, dist)
+    else:
+        partition = classif_reg(k, eigvecs, basis, partition0, reg, curves, dist)
     
     return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
     
-def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup):
+def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup, correction=False):
     ''' Streaming with on-line classification '''
     basis = basis.T
     rk = np.arange(k)[None, :]
@@ -354,6 +358,8 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
         offsets_l = np.arange(1, L)
         K_l = dia_matrix((data_l, offsets_l), shape=(n, n)).T
         return K_u+K_l
+    
+    classif = classif_reg_with_correction if correction else classif_reg
     
     # Streaming
     for t in tqdm(range(T)):
@@ -395,10 +401,10 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
                 for i in range(h_start, n):
                     pre_classif_step(i, w[t], smooth_par, partition0, exp_smooth, id_prev)
             # End of warm-up
-            partition[t] = classif_reg(k, w[t], basis, partition0, reg, curves[t], dist)
+            partition[t] = classif(k, w[t], basis, partition0, reg, curves[t], dist)
             class_count[max(0, t-n+1):t+1][rk == partition[t][:, None]] += 1
         elif t >= n:
-            partition[t] = classif_reg(k, w[t], basis, np.roll(partition[t-1], -1), reg, curves[t], dist)
+            partition[t] = classif(k, w[t], basis, np.roll(partition[t-1], -1), reg, curves[t], dist)
             class_count[max(0, t-n+1):t+1][rk == partition[t][:, None]] += 1
         
         toc = time()
@@ -406,8 +412,8 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
     
     return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth[:, ::-1].T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
 
-def easy_streaming(get_data, T, n, p, L, k):
-    ''' Streaming with on-line classification '''
+def pm1_streaming(get_data, T, n, p, L, k):
+    ''' Streaming with on-line classification (+/-1 setting) '''
     rk = np.arange(k)[None, :]
     
     # Initialisation
