@@ -294,7 +294,7 @@ def classif_reg_with_correction(k, eigvecs, basis, partition, reg, curves, dist)
     partition, reg, curves = settings[np.argmin(scores)]
     return partition
 
-def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=True):
+def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=False):
     ''' Classification algorithm '''
     eigvecs = eigvecs.T
     basis = basis.T
