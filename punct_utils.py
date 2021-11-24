@@ -8,6 +8,7 @@ from time import time
 from tqdm import tqdm
 from scipy.sparse import dia_matrix
 from scipy.sparse.linalg import eigsh
+from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
 
 khi = -0.21723362821122165741 # minimum of the Dirichlet kernel
@@ -48,6 +49,23 @@ def get_classif_error(k, partition, true_partition):
     c_err = np.min(c_err_list)
     return c_err, per, per_inv
 
+def kmeans(points, nb_classes, eps=1e-5, metric='euclidean'):
+    ''' k-means algorithm '''
+    # Initialisation
+    n, p = points.shape
+    means = [points[np.random.choice(n, size=nb_classes, replace=False)]]
+    dist = np.zeros((nb_classes, n))
+    # First iteration
+    dist = cdist(means[-1], points, metric=metric)
+    classes = np.argmin(dist, axis=0)
+    means.append(np.array([np.mean(points[classes == j], axis=0) for j in range(nb_classes)]))
+    # Iterate
+    while linalg.norm(means[-1]-means[-2]) > eps:
+        dist = cdist(means[-1], points, metric=metric)
+        classes = np.argmin(dist, axis=0)
+        means.append(np.array([np.mean(points[classes == j], axis=0) for j in range(nb_classes)]))
+    # End
+    return classes, np.array(means)
 
 # BERNOULLI MASK
 
