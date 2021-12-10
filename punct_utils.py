@@ -210,6 +210,17 @@ def eta0(axr, p, psi, y=1e-6, delta=1e-6, verbose=True):
         eta0[i] = fixed_point(func, eta0[i-1] if not np.isnan(eta0[i-1]) else 1j, delta=delta)
     return eta0
 
+def get_pht(n, p, L, tau=None, a=1e-5, b=50):
+    ''' Phase transition position for the first spike '''
+    if tau is None:
+        tau = linalg.eigh(gen_mask(n, L, kind='toeplitz'), eigvals_only=True)
+    func = lambda t: p*np.mean((tau/((t+1)*tau[0]-tau))**2)-1
+    if func(a)*func(b) < 0:
+        res = optim.root_scalar(func, method='brentq', bracket=[a, b])
+        return res.root if res.converged else np.nan
+    else:
+        return np.nan
+
 def get_spikes(n, p, L, mu_norm, tau=None):
     ''' Position, value and alignments of spikes for a circulant and Toeplitz mask '''
     psi = nu(L, 2*np.arange(n)*np.pi/n)
