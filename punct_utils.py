@@ -52,7 +52,7 @@ def get_classif_error(k, partition, true_partition):
 def kmeans(points, nb_classes, eps=1e-5, metric='euclidean'):
     ''' k-means algorithm '''
     # Initialisation
-    n, p = points.shape
+    n, _ = points.shape
     means = [points[np.random.choice(n, size=nb_classes, replace=False)]]
     dist = np.zeros((nb_classes, n))
     # First iteration
