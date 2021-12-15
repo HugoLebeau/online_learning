@@ -2,10 +2,9 @@ import numpy as np
 import scipy.linalg as linalg
 from tqdm import tqdm
 
-file = 'data/'
 classes = ['collie', 'tabby']
 
-features_files = [open(file+'{}_features.csv'.format(cl), 'r') for cl in classes]
+features_files = [open('{}_features.csv'.format(cl), 'r') for cl in classes]
 features = []
 for f in tqdm(features_files):
     features.append(np.loadtxt(f))
@@ -17,7 +16,7 @@ centered_features = all_features-mean
 cov = (centered_features.T)@centered_features/centered_features.shape[0]
 sqrt_cov = linalg.sqrtm(cov)
 
-output = [open(file+'{}_normalized.csv'.format(cl), 'w') for cl in classes]
+output = [open('{}_normalized.csv'.format(cl), 'w') for cl in classes]
 
 for f, o in tqdm(zip(features, output)):
     np.savetxt(o, linalg.solve(sqrt_cov, (f-mean).T).T)
