@@ -46,4 +46,4 @@ for cl in classes:
     print("Class {} | X mean 2-norm:".format(cl), np.linalg.norm(np.mean(x0[y == cl], axis=0), ord=2))
 
 np.savetxt('epsilon_data', x0)
-np.savetxt('epsilon_classes', y)
+np.savetxt('epsilon_classes', y, fmt='%i')
