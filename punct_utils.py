@@ -448,7 +448,8 @@ def pm1_streaming(get_data, T, n, p, L, k):
     # Initialisation
     data = np.zeros((L, p)) # data pipeline
     K_data = np.zeros((n, L)) # sparse kernel matrix
-    lbda = np.zeros(T) # top eigenvalue
+    lbda = np.empty(T) # top eigenvalue
+    lbda[:] = np.nan
     w = np.ones((T, n, 1)) # top eigenvector
     
     partition = -np.ones((T, n), dtype=int) # classification of the last n points
