@@ -28,7 +28,7 @@ def fixed_point(f, x0, delta=1e-6, time_lim=5):
     return xp
 
 def getJ(n, pi):
-    ''' Generation of a J matrix '''
+    ''' Generation of a matrix J '''
     k = len(pi)
     n_ = np.round(n*pi).astype(int)
     n_[0] += n-np.sum(n_)
@@ -49,110 +49,13 @@ def get_classif_error(k, partition, true_partition):
     c_err = np.min(c_err_list)
     return c_err, per, per_inv
 
-def kmeans(points, nb_classes, eps=1e-5, metric='euclidean'):
-    ''' k-means algorithm '''
-    # Initialisation
-    n, _ = points.shape
-    means = [points[np.random.choice(n, size=nb_classes, replace=False)]]
-    dist = np.zeros((nb_classes, n))
-    # First iteration
-    dist = cdist(means[-1], points, metric=metric)
-    classes = np.argmin(dist, axis=0)
-    means.append(np.array([np.mean(points[classes == j], axis=0) for j in range(nb_classes)]))
-    # Iterate
-    while linalg.norm(means[-1]-means[-2]) > eps:
-        dist = cdist(means[-1], points, metric=metric)
-        classes = np.argmin(dist, axis=0)
-        means.append(np.array([np.mean(points[classes == j], axis=0) for j in range(nb_classes)]))
-    # End
-    return classes, np.array(means)
-
-# BERNOULLI MASK
-
-# Phase transition functions
-def F(t, c, eS, eB, b):
-    return t**4+(2/eS)*t**3+(1-c/eB)/eS**2*t**2-2*c/eS**3*t-c/eS**4
-def G(t, c, eS, eB, b):
-    return eS*b+eB*eS*(1+eS*t)/c+eS/(1+eS*t)+eB/(t*(1+eS*t))
-def zeta(l, c, eS, eB, b, Gamma):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore") # avoid division by 0 warning
-        return np.where(l > Gamma, F(l, c, eS, eB, b)*eS**3/l/(1+eS*l)**3, 0.)
-
-def genS_bernoulli(n, p, eS):
-    ''' Generation of a p x n Bernoulli mask '''
-    return stats.bernoulli.rvs(eS, size=(p, n))
-
-def genB_bernoulli(n, eB, b):
-    ''' Generation of an n x n Bernoulli mask '''
-    B = stats.bernoulli.rvs(eB, size=(n, n))
-    for i in range(n):
-        B[i, i] = b
-        B[i, i+1:] = B[i+1:, i]
-    return B
-
-def simul_bernoulli(nbMC, M, J, eS, eB, b, comp=False):
-    ''' Two-way Bernoulli puncturing simulation '''
-    n, p, k = J.shape[0], M.shape[0], J.shape[1]
-    P = M@(J.T)
-    n_ = J.sum(axis=0)
-    dtype = 'complex' if comp else 'float'
-    
-    eigvals = np.zeros((nbMC, n))
-    eigvecs = np.zeros((nbMC, k, n), dtype=dtype)
-    alignments = np.zeros((nbMC, k))
-    
-    for iMC in tqdm(range(nbMC)):
-        Z = stats.norm.rvs(size=(p, n))
-        if comp:
-            Z += 1j*stats.norm.rvs(size=(p, n))
-            Z /= np.sqrt(2)
-        X = Z+P
-        S, B = genS_bernoulli(n, p, eS), genB_bernoulli(n, eB, b)
-        XS = X*S
-        K = ((XS.T.conj())@XS)*B/p
-    
-        eigvals[iMC] = linalg.eigh(K, eigvals_only=True)
-        eigvecs[iMC] = eigsh(K, k=k, which='LA')[1].T
-        alignments[iMC] = (np.abs(eigvecs[iMC]@J)**2).sum(axis=1)/n_
-    
-    return eigvals, eigvecs, alignments
-
-def get_LSD_bernoulli(axr, c, eS, eB, b, y=1e-6):
-    ''' Limiting spectral distribution for a Bernoulli mask '''
-    m_stieltjes = np.zeros(axr.shape, dtype='complex')
-    m_stieltjes[-1] = 1j
-    density = np.zeros(axr.shape, dtype='float')
-    for i, x in enumerate(tqdm(axr)):
-        z = x+1j*y
-        func = lambda m: 1/(eS*b-z-eB*eS**2*m/c+(eB**3*eS**3*m**2/c**2)/(1+eB*eS*m/c))
-        m_stieltjes[i] = fixed_point(func, m_stieltjes[i-1] if not np.isnan(m_stieltjes[i-1]) else 1j)
-        density[i] = m_stieltjes[i].imag/np.pi
-    return density
-
-def get_spikes_bernoulli(pi, M, c, eS, eB, b, bracket=[0.1, 1000], method='brentq'):
-    ''' Position of the spikes and eigenvectors alignments for a Bernoulli mask '''
-    L = (np.sqrt(pi).reshape((-1, 1))@np.sqrt(pi).reshape((1, -1)))*(M.T.conj()@M)
-    ell = linalg.eigh(L, eigvals_only=True)[::-1]
-    root = optim.root_scalar(F, args=(c, eS, eB, b), bracket=bracket, method=method)
-    Gamma = root.root # phase transition threshold
-    rho = G(ell[ell > Gamma], c, eS, eB, b) # position of the spikes
-    alignments = zeta(ell, c, eS, eB, b, Gamma)
-    return rho, alignments
-
-
 # TOEPLITZ / CIRCULANT MASK
 
 def nu(L, x):
+    ''' sin( (2 L - 1) x / 2 ) / sin( x / 2 ) '''
     with warnings.catch_warnings():
         warnings.simplefilter("ignore") # avoid division by 0 warning
         return np.where(np.isclose(x%(2*np.pi), 0.), 2*L-1, np.divide(np.sin((L-0.5)*x), np.sin(x/2)))
-
-# L <-> eB for a band Toeplitz matrix
-def eB2L(n, eB):
-    return int(np.round(n+0.5-np.sqrt(n**2*(1-eB)+0.25)))
-def L2eB(n, L):
-    return 1/n+(L-1)*(2*n-L)/n**2
 
 def gen_mask(n, L, kind='toeplitz'):
     ''' Generation of an n x n Toeplitz/circulant mask '''
@@ -172,10 +75,9 @@ def gen_mask(n, L, kind='toeplitz'):
         raise NotImplementedError(kind)
 
 def basis(n, L, kind='toeplitz'):
-    ''' Eigenvectors of the Toeplitz mask '''
+    ''' Eigenvectors of the Toeplitz/circulant mask '''
     B = gen_mask(n, L, kind=kind)
-    eigvals, eigvecs = linalg.eigh(B)
-    return eigvals, eigvecs.T
+    return linalg.eigh(B)
 
 def simul(nbMC, L, M, J, mask='toeplitz', comp=False, verbose=True):
     ''' Toeplitz/circulant puncturing simulation '''
@@ -196,17 +98,16 @@ def simul(nbMC, L, M, J, mask='toeplitz', comp=False, verbose=True):
         K = ((X.T.conj())@X)*B/p
     
         eigvals[iMC], eigvecs[iMC] = linalg.eigh(K)
-        eigvecs[iMC] = eigvecs[iMC].T
     
     return eigvals, eigvecs
 
-def eta0(axr, p, psi, y=1e-6, delta=1e-6, verbose=True):
-    ''' 1/(1-z-eta0) is the Stieltjes transform for a circulant/Toeplitz mask '''
+def eta0(axr, p, tau, y=1e-6, delta=1e-6, verbose=True):
+    ''' 1/(1-z-eta0) is the Stieltjes transform for a circulant mask '''
     eta0 = np.zeros(axr.shape, dtype='complex')
     eta0[-1] = 1j
     for i, x in enumerate(tqdm(axr, disable=not verbose)):
         z = x+1j*y
-        func = lambda eta0: np.mean(psi**2/(p*(1-z-eta0)+psi))
+        func = lambda eta0: np.mean(tau**2/(p*(1-z-eta0)+tau))
         eta0[i] = fixed_point(func, eta0[i-1] if not np.isnan(eta0[i-1]) else 1j, delta=delta)
     return eta0
 
@@ -260,11 +161,11 @@ def get_spikes(n, p, L, mu_norm, tau=None):
     
     return res_c, res_t
 
-def est_mu(p, first_spike, psi, mu0=3):
+def est_mu(p, first_spike, tau, mu0=3):
     ''' Estimation of ||mu|| with the first spike for a circulant/Toeplitz mask '''
-    func = lambda x: x*(1+p*np.mean(psi/(x-psi)))/p-first_spike
-    res = optim.fsolve(func, (mu0**2+1)*psi[-1])
-    return np.sqrt(res/psi[-1]-1)
+    func = lambda x: x*(1+p*np.mean(tau/(x-tau)))/p-first_spike
+    res = optim.fsolve(func, (mu0**2+1)*tau[-1])
+    return np.sqrt(res/tau[-1]-1)
 
 
 # CLASSIFICATION FUNCTIONS
@@ -325,9 +226,6 @@ def classif_reg_with_correction(k, eigvecs, basis, partition, reg, curves, dist)
 
 def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=False):
     ''' Classification algorithm '''
-    eigvecs = eigvecs.T
-    basis = basis.T
-    
     n = eigvecs.shape[0]
     n_eigvecs = eigvecs.shape[1]
     df = basis.shape[1]
@@ -354,11 +252,10 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=
     else:
         partition = classif_reg(k, eigvecs, basis, partition0, reg, curves, dist)
     
-    return partition, (exp_smooth.T, partition0, reg, np.transpose(curves, (0, 2, 1)))
+    return partition, (exp_smooth, partition0, reg, curves)
     
 def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup, correction=False):
-    ''' Streaming with on-line classification '''
-    basis = basis.T
+    ''' Streaming with online classification '''
     rk = np.arange(k)[None, :]
     n, df = basis.shape
     
@@ -377,7 +274,7 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
     curves = np.zeros((T, k, n, n_eigvecs)) # curve associated to each class
     dist = np.zeros((k, n)) # distance of each point to each class
     
-    time_ite = np.zeros(T)
+    time_ite = np.zeros(T) # duration of each iteration
     
     def make_K(K_data):
         data_u = K_data.T
@@ -439,10 +336,10 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
         toc = time()
         time_ite[t] = toc-tic
     
-    return class_count, (lbda[:, ::-1].T, np.transpose(w[:, :, ::-1], (0, 2, 1)), exp_smooth[:, ::-1].T, partition0, np.transpose(curves[:, :, :, ::-1], (0, 1, 3, 2)), partition, time_ite)
+    return class_count, (lbda[:, ::-1], w[:, :, ::-1], exp_smooth[:, ::-1], partition0, curves[:, :, :, ::-1], partition, time_ite)
 
 def pm1_streaming(get_data, T, n, p, L, k):
-    ''' Streaming with on-line classification (+/-1 setting) '''
+    ''' Streaming with online classification (+/-1 setting) '''
     rk = np.arange(k)[None, :]
     
     # Initialisation
@@ -455,7 +352,7 @@ def pm1_streaming(get_data, T, n, p, L, k):
     partition = -np.ones((T, n), dtype=int) # classification of the last n points
     class_count = np.zeros((T, k), dtype=int) # class_count[t, j] = number of times point x_t is classified in class j
     
-    time_ite = np.zeros(T)
+    time_ite = np.zeros(T) # duration of each iteration
     
     def make_K(K_data):
         data_u = K_data.T
