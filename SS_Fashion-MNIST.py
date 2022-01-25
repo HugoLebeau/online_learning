@@ -21,6 +21,9 @@ n, p = Xc.shape
 K = Xc@Xc.T/p
 eigvals, eigvecs = eigsh(K, k=1, which='LA')
 
+mu_est = np.sqrt((-(1+(1-eigvals[0])*p/n)+np.sqrt((1+(1-eigvals[0])*p/n)**2-4*p/n))/2)
+print("mu_est = {}".format(mu_est))
+
 plt.hist(eigvals, density=True, edgecolor='black', bins='sqrt')
 plt.grid(ls=':')
 plt.show()

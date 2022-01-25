@@ -16,13 +16,16 @@ X, y = X[idx], y[idx]
 K = X@X.T/p
 eigvals, eigvecs = eigsh(K, k=1, which='LA')
 
+mu_est = np.sqrt((-(1+(1-eigvals[0])*p/n)+np.sqrt((1+(1-eigvals[0])*p/n)**2-4*p/n))/2)
+print("mu_est = {}".format(mu_est))
+
 plt.hist(eigvals, density=True, edgecolor='black', bins='sqrt')
 plt.grid(ls=':')
 plt.show()
 
 axr = np.arange(n)
 for j in np.unique(y):
-    cl = (y == j) & (axr > 500) & (axr < 1000)
+    cl = (y == j)
     plt.plot(axr[cl], eigvecs[cl, -1], ls='', marker='.')
 plt.grid(ls=':')
 plt.show()
