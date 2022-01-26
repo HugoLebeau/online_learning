@@ -17,11 +17,6 @@ K = X@X.T/p
 eigvals, eigvecs = eigsh(K, k=1, which='LA')
 
 mu_est = np.sqrt((-(1+(1-eigvals[0])*p/n)+np.sqrt((1+(1-eigvals[0])*p/n)**2-4*p/n))/2)
-print("mu_est = {}".format(mu_est))
-
-plt.hist(eigvals, density=True, edgecolor='black', bins='sqrt')
-plt.grid(ls=':')
-plt.show()
 
 axr = np.arange(n)
 for j in np.unique(y):
@@ -32,3 +27,5 @@ plt.show()
 
 y_est = np.where(eigvecs[:, -1] > 0, 'tabby', 'collie')
 c_err = np.mean(y_est != y)
+c_err = min(c_err, 1-c_err)
+print(c_err)

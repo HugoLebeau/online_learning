@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from punct_utils import get_classif_error
 from scipy.sparse.linalg import eigsh
+from sklearn.cluster import KMeans
 from sklearn.datasets import fetch_openml
 
 X, y = fetch_openml('Fashion-MNIST', return_X_y=True)
@@ -19,14 +21,9 @@ for i, j in enumerate(np.sort(classes)):
 n, p = Xc.shape
 
 K = Xc@Xc.T/p
-eigvals, eigvecs = eigsh(K, k=1, which='LA')
+eigvals, eigvecs = eigsh(K, k=5, which='LA')
 
 mu_est = np.sqrt((-(1+(1-eigvals[0])*p/n)+np.sqrt((1+(1-eigvals[0])*p/n)**2-4*p/n))/2)
-print("mu_est = {}".format(mu_est))
-
-plt.hist(eigvals, density=True, edgecolor='black', bins='sqrt')
-plt.grid(ls=':')
-plt.show()
 
 axr = np.arange(n)
 for j in range(k):
@@ -35,3 +32,7 @@ for j in range(k):
 plt.grid(ls=':')
 plt.legend()
 plt.show()
+
+kmeans = KMeans(n_clusters=k, random_state=0).fit(eigvecs)
+c_err, per, per_inv = get_classif_error(k, kmeans.labels_, yc)
+print(c_err)
