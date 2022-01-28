@@ -8,7 +8,6 @@ from time import time
 from tqdm import tqdm
 from scipy.sparse import dia_matrix
 from scipy.sparse.linalg import eigsh
-from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
 
 khi = -0.21723362821122165741 # minimum of the Dirichlet kernel
