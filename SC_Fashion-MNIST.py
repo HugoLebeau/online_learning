@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from punct_utils import get_classif_error
+from online_utils import get_classif_error
 from scipy.sparse.linalg import eigsh
 from sklearn.cluster import KMeans
 from sklearn.datasets import fetch_openml
