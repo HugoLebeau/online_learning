@@ -38,7 +38,7 @@ bounds = np.array([Xc.min(axis=0), Xc.max(axis=0)])
 Phi_fullprec = sk.SimpleFeatureMap("ComplexExponential", Omega, xi, c_norm=np.pi/2*np.sqrt(2))
 solver = cl.CLOMP_CKM(Phi_fullprec, k, bounds, z)
 print("Fitting k-means... ", end='')
-solver.fit_once()
+solver.fit_several_times(10)
 print("Done.")
 centroids = solver.get_centroids()
 
