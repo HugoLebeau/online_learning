@@ -121,6 +121,30 @@ def get_pht(n, p, L, tau=None, a=1e-5, b=50):
     else:
         return np.nan
 
+def phi(c, eps, a=1e-5, b=50, infty=10000):
+    ''' Asymptotic version of the previous function '''
+    range_l = np.arange(1, infty)
+    func = lambda t: 1-c*(1/(t*t)+2*np.sum(((t+1)/(np.sinc(eps*range_l))-1)**(-2)))
+    if func(a)*func(b) < 0:
+        res = optim.root_scalar(func, method='brentq', bracket=[a, b])
+        return res.root if res.converged else np.nan
+    else:
+        return np.nan
+
+def best_nL(M, p):
+    ''' Compute best parameters n and L for a given memory (M) and data dimension (p) '''
+    # Grid search parameters
+    ll_r = np.linspace(0.01, 0.99, 99)
+    alpha=1e-5
+    r = M/(p*p)
+    func = lambda ll: phi(ll/(1-ll), 2*ll*ll*r/(1-ll))
+    grid = np.array([func(ll) for ll in ll_r])
+    ll_argmin = ll_r[np.argmin(grid)]
+    a, b = max(alpha, ll_argmin-0.01), min(1-alpha, ll_argmin+0.01)
+    res = optim.minimize_scalar(func, bracket=(a, b), method='brent')
+    n, L = int(np.round((1-res.x)*p/res.x)), int(np.round(res.x*M/p))
+    return n, L if res.success else np.nan
+
 def get_spikes(n, p, L, mu_norm, tau=None):
     ''' Position, value and alignments of spikes for a circulant and Toeplitz mask '''
     psi = nu(L, 2*np.arange(n)*np.pi/n)
@@ -253,7 +277,7 @@ def classification(k, eigvecs, basis, smooth_par=0.15, h_start=None, correction=
     
     return partition, (exp_smooth, partition0, reg, curves)
     
-def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup, correction=False):
+def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divided_warmup, correction=False, verbose=True):
     ''' Streaming with online classification '''
     rk = np.arange(k)[None, :]
     n, df = basis.shape
@@ -287,7 +311,7 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
     classif = classif_reg_with_correction if correction else classif_reg
     
     # Streaming
-    for t in tqdm(range(T)):
+    for t in tqdm(range(T), disable=not verbose):
         tic = time()
         
         # Get a new point in the pipeline
@@ -337,7 +361,7 @@ def streaming(get_data, T, p, L, k, n_eigvecs, basis, smooth_par, h_start, divid
     
     return class_count, (lbda[:, ::-1], w[:, :, ::-1], exp_smooth[:, ::-1], partition0, curves[:, :, :, ::-1], partition, time_ite)
 
-def pm1_streaming(get_data, T, n, p, L, k):
+def pm1_streaming(get_data, T, n, p, L, k, verbose=True):
     ''' Streaming with online classification (+/-1 setting) '''
     rk = np.arange(k)[None, :]
     
@@ -363,7 +387,7 @@ def pm1_streaming(get_data, T, n, p, L, k):
         return K_u+K_l
     
     # Streaming
-    for t in tqdm(range(T)):
+    for t in tqdm(range(T), disable=not verbose):
         tic = time()
         
         # Get a new point in the pipeline
