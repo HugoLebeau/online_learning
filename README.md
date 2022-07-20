@@ -1,5 +1,5 @@
-# A random matrix analysis of data stream clustering
-This is the companion GitHub repository for our ICML'22 article "A random matrix analysis of data stream clustering: coping with limited memory resources" by Hugo Lebeau, Romain Couillet and Florent Chatelain.
+# A Random Matrix Analysis of Data Stream Clustering
+This is the companion GitHub repository for our ICML'22 article "A Random Matrix Analysis of Data Stream Clustering: Coping With Limited Memory Resources" by Hugo Lebeau, Romain Couillet and Florent Chatelain.
 
 The python script `online_utils.py` contains all the useful functions to reproduce our results.
 
