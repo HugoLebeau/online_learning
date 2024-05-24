@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pycle.sketching as sk
 import pycle.compressive_learning as cl
 from tqdm import tqdm
+from matplotlib.ticker import PercentFormatter
 from scipy.spatial.distance import cdist
 from scipy.sparse.linalg import eigsh
 from sklearn.datasets import fetch_openml
@@ -65,7 +66,8 @@ def streaming(k, M, X, y, verbose=False):
         print("n = {}\nL = {}".format(n, L))
     class_count, (lbda, w, partition_ite, time_ite) = utils.pm1_streaming((lambda t: X[t]), T, n, p, L, k, verbose=verbose)
     y_est = np.argmax(class_count, axis=1) # estimate classes via majority vote
-    c_err, _, _ = utils.get_classif_error(k, y_est, y)
+    c_err, per, per_inv = utils.get_classif_error(k, y_est, y)
+    delay_c_err = np.mean(per[partition_ite[n-1:]] != np.array([y[t:t+n] for t in range(T-n+1)]), axis=0)[::-1]
 
     if verbose:
         t = T//2
@@ -75,6 +77,16 @@ def streaming(k, M, X, y, verbose=False):
             plt.plot(xx[mask], w[t][mask], ls='', marker='.', color='C'+str(j))
         plt.title("Top eigenvector")
         plt.grid(ls=':')
+        plt.show()
+
+        plt.plot(delay_c_err)
+        plt.axhline(y=c_err, ls='--', label="Overall classification error")
+        plt.grid(ls=':')
+        plt.gca().yaxis.set_major_formatter(PercentFormatter(xmax=1))
+        plt.xlabel("Delay $\\Delta t$")
+        plt.ylabel("Classification error")
+        plt.legend()
+        plt.show()
 
     return c_err
 
@@ -98,7 +110,7 @@ def sketching(k, M, X, y, n_repetitions=10, verbose=False):
     T, p = X.shape
     X_bounded = (2*X-X.max()-X.min())/(X.max()-X.min()) # bound between -1 and 1
     bounds = np.array([-np.ones(p), np.ones(p)])
-    m = int(M/(p+1)) # sketch size
+    m = M//(p+1) # sketch size
 
     Sigma = sk.estimate_Sigma(X_bounded, m0=m, n0=T, verbose=verbose) # not realistic -> yields an optimistic error rate
     Omega = sk.drawFrequencies("FoldedGaussian", p, m, Sigma)
