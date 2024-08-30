@@ -135,16 +135,17 @@ def best_nL(M, p):
     ''' Compute best parameters n and L for a given memory (M) and data dimension (p) '''
     # Grid search parameters
     ll_r = np.linspace(0.01, 0.99, 99)
-    alpha=1e-5
+    alpha = 1e-5
     r = M/(p*p)
-    func = lambda ll: phi(ll/(1-ll), 2*ll*ll*r/(1-ll)) # phase transition position given lambda
+    func = lambda ll: phi(1/((1-ll)/ll+ll*r/2), 2*ll*r/((1-ll)/ll+ll*r/2)) # phase transition position given lambda
     # Minimize phase transition position on lambda
     grid = np.array([func(ll) for ll in ll_r]) # grid search
-    ll_argmin = ll_r[np.argmin(grid)]
+    ll_max = (np.sqrt(2*r+1)-1)/r
+    ll_argmin = ll_r[np.argmin(grid[ll_r < ll_max])]
     a, b = max(alpha, ll_argmin-0.01), min(1-alpha, ll_argmin+0.01)
     res = optim.minimize_scalar(func, bracket=(a, b), method='brent') # minimization
-    if res.success and res.x > 0 and res.x < 1:
-        n, L = int(np.round((1-res.x)*p/res.x)), int(np.round(res.x*M/p)) # resulting n, L
+    if res.success and res.x > 0 and res.x <= ll_max:
+        n, L = int(np.round((1-res.x)*p/res.x+(res.x*M/p-1)/2)), int(np.round(res.x*M/p)) # resulting n, L
         return n, L
     else:
         return np.nan, np.nan
