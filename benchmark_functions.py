@@ -92,17 +92,24 @@ def streaming(k, M, X, y, verbose=False):
 
 def batch(k, M, X, y, verbose=False):
     T, p = X.shape
-    L_ = int(np.round((p/2)*(np.sqrt(1+4*M/(p*p))-1)))
+    L_ = int(np.round(-(p+.5)+np.sqrt((p+.5)**2+2*M)))
     if verbose:
         print("L' = {}".format(L_))
     y_est = np.zeros_like(y)
-    for i in tqdm(range(int(np.ceil(T/L_))), disable=not verbose):
+    for i in tqdm(range(T//L_), disable=not verbose):
         subX = X[i*L_:(i+1)*L_]
         subK = subX@subX.T/p # kernel matrix
         eigvals, eigvecs = eigsh(subK, k=1, which='LA') # dominant eigenvalue/eigenvector
         y_est[i*L_:(i+1)*L_] = np.where(eigvecs[:, -1] > 0, 0, 1) # class estimation
         _, per, _ = utils.get_classif_error(k, y_est[i*L_:(i+1)*L_], y[i*L_:(i+1)*L_])
         y_est[i*L_:(i+1)*L_] = per[y_est[i*L_:(i+1)*L_]]
+    if (i+1)*L_ < T: # last iteration
+        subX = X[(i+1)*L_:]
+        subK = subX@subX.T/p # kernel matrix
+        eigvals, eigvecs = eigsh(subK, k=1, which='LA') # dominant eigenvalue/eigenvector
+        y_est[(i+1)*L_:] = np.where(eigvecs[:, -1] > 0, 0, 1) # class estimation
+        _, per, _ = utils.get_classif_error(k, y_est[(i+1)*L_:], y[(i+1)*L_:])
+        y_est[(i+1)*L_:] = per[y_est[(i+1)*L_:]]
     c_err, _, _ = utils.get_classif_error(k, y_est, y)
     return c_err
 
